@@ -1,0 +1,22 @@
+{
+  "name": "sulan",
+  "version": "0.1.0",
+  "description": "速览：在侧边 pane 实时显示会话摘要（目标、做了什么、结论、现状、需要你），并用彩色流程图画出进度",
+  "author": {
+    "name": "DylanLi",
+    "url": "https://github.com/DylanLIiii"
+  },
+  "homepage": "https://github.com/DylanLIiii/sulan",
+  "repository": "https://github.com/DylanLIiii/sulan",
+  "license": "MIT",
+  "keywords": ["mod", "summary", "catch-up", "mermaid", "chinese"],
+  "userConfig": {
+    "icons": {
+      "type": "string",
+      "title": "图标",
+      "description": "nerd：Nerd Font 图标，需要终端使用 Nerd Font；unicode：普通符号，任何字体都能显示。Desktop 和 VS Code 总是使用 unicode。",
+      "default": "nerd",
+      "options": ["nerd", "unicode"]
+    }
+  }
+}

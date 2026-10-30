@@ -1,0 +1,8 @@
+{
+  "name": "sulan",
+  "description": "速览 sulan：Claude Code 会话实时摘要 mod，带图标与彩色流程图",
+  "owner": { "name": "DylanLi", "url": "https://github.com/DylanLIiii" },
+  "plugins": [
+    { "name": "sulan", "source": "./" }
+  ]
+}

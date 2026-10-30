@@ -1,0 +1,15 @@
+{
+  "name": "sulan-dev",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling only. The mod itself has no runtime dependencies.",
+  "scripts": {
+    "build:vendor": "node build-vendor.mjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test unit.test.mjs",
+    "preview": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON preview.mjs"
+  },
+  "devDependencies": {
+    "beautiful-mermaid": "1.1.3",
+    "esbuild": "0.28.2"
+  }
+}
