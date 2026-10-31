@@ -1,7 +1,7 @@
 // Parses the summary Haiku writes (the format INSTRUCTIONS.md asks for) into
-// a TL;DR, five text sections and a flow diagram with its caption.
+// a TL;DR, up to six text sections and a flow diagram with its caption.
 
-export const SECTION_ORDER = ['why', 'did', 'out', 'now', 'next']
+export const SECTION_ORDER = ['why', 'did', 'out', 'now', 'next', 'terms']
 
 // Headings the model might write instead of the ids, mapped back to the ids
 const ALIASES = {
@@ -10,11 +10,12 @@ const ALIASES = {
   out: 'out', 结论: 'out',
   now: 'now', 现状: 'now',
   next: 'next', 需要你: 'next', 下一步: 'next',
+  terms: 'terms', glossary: 'terms', 名词: 'terms', 术语: 'terms', 概念: 'terms', 名词与概念: 'terms', 名词解释: 'terms',
   flow: 'flow', 进度: 'flow', 流程: 'flow',
 }
 
 const TLDR = /^(?:\*\*)?TL;?DR(?:\*\*)?\s*[:：]\s*(.*)$/i
-const HEADING = /^#{1,3}\s*([^\s#]+)\s*$/
+const HEADING = /^#{1,3}\s*(.+?)\s*$/
 const BULLET = /^(?:[-*•]|\d+[.)])\s+(.*)$/
 const STATUS = /^\[(done|wip|fail|ask|todo)\]\s*/i
 const FENCE = /^```/
@@ -60,7 +61,12 @@ export function parseSummary(text) {
     })
   }
 
-  const ordered = SECTION_ORDER.filter((id) => sections.get(id)?.length).map((id) => ({ id, items: sections.get(id) }))
+  const ordered = SECTION_ORDER.filter((id) => {
+    const items = sections.get(id)
+    if (!items?.length) return false
+    if (id === 'terms' && items.length === 1 && /^(无|暂无|none|n\/a)[。.]?$/i.test(items[0].text.trim())) return false
+    return true
+  }).map((id) => ({ id, items: sections.get(id) }))
   const flow = flowLines.join('\n').trim()
   const tldr = tldrLines.join(' ')
   if (!tldr && ordered.length === 0) return null

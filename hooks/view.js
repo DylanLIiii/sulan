@@ -7,18 +7,18 @@ import { truncate, width } from './text.js'
 
 // Nerd Font (Font Awesome range, stable across Nerd Font versions)
 const NERD = {
-  tldr: '\uf0e7', why: '\uf140', did: '\uf0ad', out: '\uf0eb', now: '\uf041', next: '\uf0a9', flow: '\uf0e8', time: '\uf017',
+  tldr: '\uf0e7', why: '\uf140', did: '\uf0ad', out: '\uf0eb', now: '\uf041', next: '\uf0a9', terms: '\uf02d', flow: '\uf0e8', time: '\uf017',
   done: '\uf00c', wip: '\uf110', fail: '\uf00d', ask: '\uf128', todo: '\uf10c',
 }
 const PLAIN = {
-  tldr: '◆', why: '◎', did: '✎', out: '✦', now: '◉', next: '➜', flow: '❖', time: '',
+  tldr: '◆', why: '◎', did: '✎', out: '✦', now: '◉', next: '➜', terms: '◈', flow: '❖', time: '',
   done: '✓', wip: '◐', fail: '✗', ask: '?', todo: '○',
 }
 // Inside the diagram, glyphs stay one cell wide everywhere
 const NODE_GLYPH = { done: '✓', wip: '◐', fail: '✗', todo: '○' }
 
-const TITLES = { why: '目标', did: '做了什么', out: '结论', now: '现状', next: '需要你', flow: '进度' }
-const SECTION_COLOR = { why: 'blue', did: 'magenta', out: 'yellow', now: 'green', next: 'cyan', flow: 'blue' }
+const TITLES = { why: '目标', did: '做了什么', out: '结论', now: '现状', next: '需要你', terms: '名词与概念', flow: '进度' }
+const SECTION_COLOR = { why: 'blue', did: 'magenta', out: 'yellow', now: 'green', next: 'cyan', terms: 'magenta', flow: 'blue' }
 const STATUS_STYLE = { done: { color: 'green' }, wip: { color: 'yellow' }, fail: { color: 'red' }, ask: { color: 'cyan' }, todo: { dimColor: true } }
 const TONE = {
   done: { color: 'green' },

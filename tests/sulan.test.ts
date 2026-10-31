@@ -17,6 +17,8 @@ const SAMPLE = `TLDR: 方案已定，正在写 \`register.js\`
 - [wip] 代码写到一半
 ## next
 - [ask] 要不要加 SVG？
+## terms
+- **PromptHint**：输入框下方的常驻提示行
 ## flow
 \`\`\`mermaid
 flowchart LR
@@ -72,11 +74,12 @@ function stubSession(on: any, { saved, messages = [], reply = SAMPLE }: { saved?
 test('parses the TL;DR, sections, statuses, flow and caption', async () => {
   const p = parseSummary(SAMPLE)!
   expect(p.tldr).toBe('方案已定，正在写 `register.js`')
-  expect(p.sections.map((s) => s.id)).toEqual(['why', 'did', 'out', 'now', 'next'])
+  expect(p.sections.map((s) => s.id)).toEqual(['why', 'did', 'out', 'now', 'next', 'terms'])
   expect(p.sections[3]!.items).toEqual([
     { status: 'done', text: '方案已确认' },
     { status: 'wip', text: '代码写到一半' },
   ])
+  expect(p.sections[5]!.items).toEqual([{ status: null, text: '**PromptHint**：输入框下方的常驻提示行' }])
   expect(p.flow).toMatch(/^flowchart LR/)
   expect(p.flow).not.toMatch(/```/)
   expect(p.caption).toEqual(['验证要在宽、窄终端各看一次'])
@@ -134,7 +137,7 @@ test('the pane draws every section and the diagram on each surface', async ($, o
   await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/work' })
   for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    for (const title of ['目标', '做了什么', '结论', '现状', '需要你', '进度']) {
+    for (const title of ['目标', '做了什么', '结论', '现状', '需要你', '名词与概念', '进度']) {
       expect(await ui.find({ type: 'Text', text: title })).toBeDefined()
     }
     expect(await ui.find({ type: 'Text', text: '2/4 · 50%' })).toBeDefined()

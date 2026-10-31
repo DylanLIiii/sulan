@@ -1,7 +1,7 @@
 {
   "name": "sulan",
   "version": "0.1.0",
-  "description": "速览：在侧边 pane 实时显示会话摘要（目标、做了什么、结论、现状、需要你），并用彩色流程图画出进度",
+  "description": "速览：在侧边 pane 实时显示会话摘要（目标、做了什么、结论、现状、需要你、名词与概念），并用彩色流程图画出进度",
   "author": {
     "name": "DylanLi",
     "url": "https://github.com/DylanLIiii"

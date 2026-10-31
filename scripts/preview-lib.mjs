@@ -21,6 +21,9 @@ export const SAMPLE = `TLDR: 方案已定，正在实现 sulan 的 pane 与流�
 - [fail] \`claude plugin test\` 因网关关闭特性开关而无法运行
 ## next
 - [ask] 要不要在 Desktop 里换成 SVG 矢量图？
+## terms
+- **PromptHint**：输入框下方常驻的一行提示区，这里用来放 TL;DR
+- **宽字符补位**：汉字占两格但引擎按字数算宽度，先垫一个占位符对齐框线再删掉
 ## flow
 flowchart LR
   a["✓ 读原仓库"] --> b["✓ 定方案"]

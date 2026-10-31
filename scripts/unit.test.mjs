@@ -26,12 +26,18 @@ test('width counts CJK letters as two cells', () => {
 test('parses the summary format', () => {
   const p = parseSummary(SAMPLE)
   assert.match(p.tldr, /^方案已定/)
-  assert.deepEqual(p.sections.map((s) => s.id), ['why', 'did', 'out', 'now', 'next'])
+  assert.deepEqual(p.sections.map((s) => s.id), ['why', 'did', 'out', 'now', 'next', 'terms'])
   assert.deepEqual(p.sections.find((s) => s.id === 'now').items[0], { status: 'done', text: '方案已确认，图表方案参考 prismantis' })
+  assert.match(p.sections.find((s) => s.id === 'terms').items[0].text, /^\*\*PromptHint\*\*/)
   assert.match(p.flow, /^flowchart LR/)
   assert.doesNotMatch(p.flow, /```/)
   assert.equal(p.caption.length, 1)
   assert.equal(parseSummary('## Why this session\n- legacy'), null)
+  // Empty terms ("- 无") is omitted; Chinese heading aliases map to terms
+  const noTerms = parseSummary('TLDR: x\n## why\n- a\n## terms\n- 无')
+  assert.deepEqual(noTerms.sections.map((s) => s.id), ['why'])
+  const zhTerms = parseSummary('TLDR: x\n## 名词与概念\n- **P0**：共用事件底座工作包')
+  assert.deepEqual(zhTerms.sections.map((s) => s.id), ['terms'])
 })
 
 test('inline code and bold spans', () => {
@@ -78,6 +84,7 @@ test('the pane tree renders on every surface without throwing', () => {
       })
       const out = renderTree(tree, columns, { color: false })
       assert.match(out, /目标/)
+      assert.match(out, /名词与概念/)
       assert.match(out, /进度/)
       assert.match(out, /2\/4 · 50%/)
     }
