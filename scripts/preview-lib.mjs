@@ -114,8 +114,12 @@ function render(node, max, opts) {
       const text = p.plain ? key + p.label : `[ ${p.label} ]`
       return [{ s: text, w: (p.hotkey ? p.hotkey.length + 2 : 0) + [...p.label].reduce((a, g) => a + widthOf(g), 0) + (p.plain ? 0 : 4) }]
     }
+    case 'Input': {
+      const text = (p.label ? p.label + '  ' : '') + (p.value || p.placeholder || '') + (p.submitLabel ? '  [' + p.submitLabel + ']' : '')
+      return layoutSpans([{ text, style: { color: p.value ? undefined : 'gray' } }], max, 'wrap', opts.color)
+    }
     case 'Markdown':
-      return layoutSpans([{ text: p.text, style: { dimColor: true } }], max, 'wrap', opts.color)
+      return layoutSpans([{ text: p.text, style: {} }], max, 'wrap', opts.color)
     case 'Code':
       return p.source.split('\n').map((s) => ({ s, w: [...graphemes(s)].reduce((a, g) => a + widthOf(g), 0) }))
     case 'Box':

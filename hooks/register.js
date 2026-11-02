@@ -5,9 +5,13 @@
 
 import { parseSummary } from './summary.js'
 import { buildPane, hintLine, iconSet } from './view.js'
+import { chatPrompt, cleanTurns, createChat, MAX_ANSWER, MAX_QUESTION, MAX_SESSIONS, MAX_TURNS } from './chat.js'
+import { buildChatPane } from './chat-view.js'
 
 const PANE = 'sulan'
 const TITLE = '速览'
+const CHAT_PANE = 'sulan-chat'
+const CHAT_TITLE = '侧聊'
 const MODEL = 'haiku'
 // About how many characters of new messages go to the model in one call. A
 // longer backlog, such as after Rebuild or on resume, is folded in over several calls.
@@ -16,6 +20,8 @@ const CHUNK_CHARS = 100_000
 const KEEP_SESSIONS = 100
 
 let iconOption = 'nerd'
+const chat = createChat()
+let chatWrites = Promise.resolve()
 
 // The current session's summary, how many transcript messages it covers, and
 // a fingerprint of the last of them
@@ -38,13 +44,19 @@ function setSummary(text) {
 
 async function load($) {
   sessionId = await $.session.id()
-  const saved = await $.store.get('session:' + sessionId)
+  const id = sessionId
+  // Invalidate an old side-chat request as soon as the session changes, even
+  // if loading this session's summary takes longer than the model response.
+  const chatLoading = loadChat($, id)
+  const saved = await $.store.get('session:' + id)
+  if (sessionId !== id) return
   setSummary(saved?.summary ?? '')
   covered = saved?.covered ?? 0
   marker = saved?.marker ?? ''
   updatedAt = saved?.updatedAt ?? 0
   status = ''
   isError = false
+  await chatLoading
   $.ui.invalidate('ui.render')
 }
 
@@ -178,12 +190,195 @@ function clockText(at) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 更新`
 }
 
+// All mods API calls are in top-level functions in this file so Claude Code's
+// static analysis can see them. The write queue preserves the order of saves.
+async function loadChat($, id) {
+  const epoch = ++chat.epoch
+  chat.id = id
+  chat.turns = []
+  chat.draft = ''
+  chat.loading = true
+  chat.loadFailed = false
+  chat.running = false
+  chat.status = ''
+  chat.isError = false
+  chat.confirmClear = false
+  $.ui.invalidate('ui.render')
+  try {
+    await chatWrites.catch(() => {})
+    const saved = await $.store.get('chat:' + id)
+    if (epoch !== chat.epoch) return
+    chat.turns = cleanTurns(saved?.turns)
+    if (chat.unanswered) chat.status = '上次提问未完成，可以重试或编辑。'
+  } catch (err) {
+    if (epoch !== chat.epoch) return
+    chat.status = '读取侧聊失败：' + (err?.message || String(err))
+    chat.isError = true
+    chat.loadFailed = true
+  }
+  if (epoch !== chat.epoch) return
+  chat.loading = false
+  $.ui.invalidate('ui.render')
+}
+
+function saveChat($) {
+  const id = chat.id
+  const turns = chat.turns.map((turn) => ({ ...turn }))
+  const write = chatWrites.catch(() => {}).then(async () => {
+    const key = 'chat:' + id
+    if (!turns.length) {
+      await $.store.delete(key)
+      return
+    }
+    const updatedAt = await $.clock.now()
+    await $.store.set(key, { turns, updatedAt })
+    // No shared order key: different Claude Code sessions can save their own
+    // records without overwriting one another's session index.
+    const keys = (await $.store.keys()).filter((name) => name.startsWith('chat:') && name !== 'chat:order')
+    if (keys.length <= MAX_SESSIONS) return
+    const records = []
+    for (const name of keys) {
+      const record = await $.store.get(name)
+      if (record) records.push({ name, updatedAt: record.updatedAt ?? 0 })
+    }
+    records.sort((a, b) => b.updatedAt - a.updatedAt || (a.name === key ? -1 : b.name === key ? 1 : 0))
+    for (const old of records.slice(MAX_SESSIONS)) {
+      const current = await $.store.get(old.name)
+      if (current && (current.updatedAt ?? 0) === old.updatedAt) await $.store.delete(old.name)
+    }
+  })
+  chatWrites = write
+  return write
+}
+
+async function askChat($, value) {
+  if (chat.loading || chat.loadFailed || chat.running || chat.unanswered) return
+  const question = String(value ?? '').trim()
+  if (!question || question.length > MAX_QUESTION) {
+    chat.status = question ? `问题请控制在 ${MAX_QUESTION} 字符以内。` : '先输入一个问题。'
+    chat.isError = true
+    $.ui.invalidate('ui.render')
+    return
+  }
+  chat.turns = [...chat.turns, { question, answer: null }].slice(-MAX_TURNS)
+  chat.draft = ''
+  chat.confirmClear = false
+  return retryChat($)
+}
+
+function chatFailure(result) {
+  if (result.reason === 'nothing-to-fork') return '主会话还没有可用上下文，请先在主会话发送消息，再重试。'
+  if (result.reason === 'empty-reply') return '模型没有返回内容，可以重试。'
+  if (result.reason === 'aborted') return '请求已中断，可以重试。'
+  if (result.reason === 'api-error') return `模型请求失败（${result.error || result.status || '连接异常'}），可以重试。`
+  return result.reason || '模型没有返回内容，可以重试。'
+}
+
+async function retryChat($) {
+  if (chat.running || !chat.unanswered) return
+  const epoch = chat.epoch
+  chat.running = true
+  chat.status = '正在结合主会话思考…'
+  chat.isError = false
+  $.ui.invalidate('ui.render')
+  try {
+    await saveChat($)
+    if (epoch !== chat.epoch) return
+    const messages = await $.session.messages()
+    if (epoch !== chat.epoch) return
+    const result = await $.model.fork({ prompt: chatPrompt(chat.turns, messages) })
+    if (epoch !== chat.epoch) return
+    if (!result.isAnswered) throw new Error(chatFailure(result))
+    const answer = result.text.trim()
+    if (!answer) throw new Error('模型没有返回内容')
+    chat.turns[chat.turns.length - 1].answer = answer.length > MAX_ANSWER ? answer.slice(0, MAX_ANSWER) + '\n\n…（回答过长，已截断）' : answer
+    try {
+      await saveChat($)
+      if (epoch === chat.epoch) chat.status = ''
+    } catch (err) {
+      if (epoch === chat.epoch) {
+        chat.status = '回答已生成，但保存失败：' + (err?.message || String(err))
+        chat.isError = true
+      }
+    }
+  } catch (err) {
+    if (epoch !== chat.epoch) return
+    chat.status = '未能回答：' + (err?.message || String(err))
+    chat.isError = true
+  } finally {
+    if (epoch === chat.epoch) {
+      chat.running = false
+      $.ui.invalidate('ui.render')
+    }
+  }
+}
+
+async function editChatQuestion($) {
+  if (chat.running || !chat.unanswered) return
+  const epoch = chat.epoch
+  chat.draft = chat.turns.at(-1).question
+  chat.turns = chat.turns.slice(0, -1)
+  chat.status = ''
+  chat.isError = false
+  $.ui.invalidate('ui.render')
+  try {
+    await saveChat($)
+  } catch (err) {
+    if (epoch !== chat.epoch) return
+    chat.status = '保存失败：' + (err?.message || String(err))
+    chat.isError = true
+    $.ui.invalidate('ui.render')
+  }
+}
+
+async function clearChat($) {
+  if (!chat.confirmClear) {
+    chat.confirmClear = true
+    $.ui.invalidate('ui.render')
+    return
+  }
+  const epoch = ++chat.epoch // Ignore a response that arrives after the conversation was cleared.
+  chat.turns = []
+  chat.draft = ''
+  chat.running = false
+  chat.status = ''
+  chat.isError = false
+  chat.confirmClear = false
+  $.ui.invalidate('ui.render')
+  try {
+    await saveChat($)
+  } catch (err) {
+    if (epoch !== chat.epoch) return
+    chat.status = '清空未能保存：' + (err?.message || String(err))
+    chat.isError = true
+    $.ui.invalidate('ui.render')
+  }
+}
+
+async function copyChatAnswer($, surface) {
+  const answer = chat.lastAnswer
+  if (!answer) return
+  const epoch = chat.epoch
+  try {
+    const result = await $.ui.copy({ text: answer, surface })
+    if (epoch !== chat.epoch) return
+    chat.status = result.isCopied ? '回答已复制。' : '复制失败：' + result.reason
+    chat.isError = !result.isCopied
+  } catch (err) {
+    if (epoch !== chat.epoch) return
+    chat.status = '复制失败：' + (err?.message || String(err))
+    chat.isError = true
+  }
+  $.ui.invalidate('ui.render')
+}
+
 export function register(on, options) {
   if (options?.icons === 'unicode') iconOption = 'unicode'
 
   on('session.start', async ($, e, next) => {
     await load($)
     await $.command.register({ name: 'sulan', description: '打开速览 pane', immediate: true })
+    await $.command.register({ name: 'sulan-chat', description: '打开独立侧聊', immediate: true })
     // Opened without being asked: the terminal places it only when wide enough
     await $.ui.open({ id: PANE, title: TITLE })
     // Not awaited, so the session starts without waiting for the summary
@@ -203,6 +398,12 @@ export function register(on, options) {
     return {}
   })
 
+  // The side chat is its own pane, opened only on request
+  on('command.run', { command: 'sulan-chat' }, async ($) => {
+    await $.ui.open({ id: CHAT_PANE, title: CHAT_TITLE, focus: true })
+    return {}
+  })
+
   on('turn.complete', async ($, e, next) => {
     // No app shows the pane in a claude -p run. Not awaited, so the turn ends
     // without waiting for the summary.
@@ -211,15 +412,29 @@ export function register(on, options) {
   })
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== PANE) return next(e)
+    if (e.requestId !== PANE && e.requestId !== CHAT_PANE) return next(e)
     const el = $.ui.resolve(e)
+    const columns = e.props.bodyColumns || 40
+    if (e.requestId === CHAT_PANE) {
+      return buildChatPane(el, {
+        chat, columns,
+        onReload: () => loadChat($, chat.id),
+        onInput: (text) => { chat.draft = text },
+        onSubmit: (text) => askChat($, text),
+        onRetry: () => retryChat($),
+        onEdit: () => editChatQuestion($),
+        onClear: () => clearChat($),
+        onCancelClear: () => { chat.confirmClear = false; $.ui.invalidate('ui.render') },
+        onCopy: () => copyChatAnswer($, e.surface),
+      })
+    }
     return buildPane(el, {
       parsed,
       raw: summary,
       status,
       isError,
       when: clockText(updatedAt),
-      columns: e.props.bodyColumns || 40,
+      columns,
       surface: e.surface,
       icons: iconSet(e.surface, iconOption),
       onRefresh: () => update($, false),

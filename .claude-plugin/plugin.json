@@ -1,7 +1,7 @@
 {
   "name": "sulan",
-  "version": "0.1.0",
-  "description": "速览：在侧边 pane 实时显示会话摘要（目标、做了什么、结论、现状、需要你、名词与概念），并用彩色流程图画出进度",
+  "version": "0.2.0",
+  "description": "速览：侧边 pane 实时显示会话摘要与彩色流程图，并提供基于主会话上下文的独立侧聊",
   "author": {
     "name": "DylanLi",
     "url": "https://github.com/DylanLIiii"
@@ -9,7 +9,7 @@
   "homepage": "https://github.com/DylanLIiii/sulan",
   "repository": "https://github.com/DylanLIiii/sulan",
   "license": "MIT",
-  "keywords": ["mod", "summary", "catch-up", "mermaid", "chinese"],
+  "keywords": ["mod", "summary", "catch-up", "chat", "mermaid", "chinese"],
   "userConfig": {
     "icons": {
       "type": "string",
