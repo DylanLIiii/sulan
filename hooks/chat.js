@@ -1,6 +1,8 @@
 // Pure helpers for the side conversation. The hook module owns the state and
 // API calls, which Claude Code must be able to inspect statically.
 
+import { FOLLOW_MODEL } from './chat-models.js'
+
 export const MAX_TURNS = 8
 export const MAX_SESSIONS = 15
 export const MAX_QUESTION = 2000
@@ -18,6 +20,7 @@ export function cleanTurns(value) {
 export function createChat() {
   return {
     id: '', turns: [], draft: '', loading: false, loadFailed: false, running: false, status: '', isError: false, confirmClear: false, epoch: 0,
+    model: FOLLOW_MODEL, modelOptions: [{ value: FOLLOW_MODEL, label: '跟随主会话' }], modelsError: '', modelsLoading: false, choosingModel: false, modelNotice: '',
     get unanswered() { return this.turns.at(-1)?.answer === null },
     get lastAnswer() { return this.turns.findLast((turn) => turn.answer !== null)?.answer ?? '' },
   }
@@ -35,6 +38,48 @@ export function recentTranscript(messages) {
     }))
     return { role: message.role, text: text.slice(0, 1500), tools }
   }).filter((message) => message.text || message.tools.length)
+}
+
+// Explicit-model completions receive the visible transcript, not the fork's
+// opaque cached system prompt. Bound its size and say exactly what was omitted.
+export function mainContext(messages, summary) {
+  const budget = 80_000
+  const history = []
+  let chars = 0
+  let truncated = false
+  for (const message of [...(Array.isArray(messages) ? messages : [])].reverse()) {
+    const text = String(message.text ?? '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+    const tools = (Array.isArray(message.toolUses) ? message.toolUses : []).map((tool) => {
+      const input = JSON.stringify(tool.input ?? {})
+      const result = String(tool.text ?? '')
+      if (input.length > 2000 || result.length > 4000) truncated = true
+      return { name: String(tool.tool ?? ''), input: input.slice(0, 2000), result: result.slice(0, 4000) }
+    })
+    const record = { role: message.role, text, tools }
+    let encoded = JSON.stringify(record)
+    if (encoded.length > 16_000) {
+      truncated = true
+      record.text = text.slice(-10_000)
+      record.tools = tools.slice(-1)
+      encoded = JSON.stringify(record)
+      if (encoded.length > 16_000) {
+        record.text = text.slice(-6000)
+        record.tools = []
+        encoded = JSON.stringify(record)
+      }
+    }
+    if (chars + encoded.length > budget) { truncated = true; break }
+    history.unshift(record)
+    chars += encoded.length
+  }
+  return {
+    text: [
+      '主会话速览：', String(summary || '(暂无速览)').slice(0, 10_000),
+      truncated ? '主会话历史（已限长，仅保留最近可容纳的消息；消息或工具结果可能截短）：' : '主会话历史（按时间顺序）：',
+      JSON.stringify(history),
+    ].join('\n'),
+    truncated,
+  }
 }
 
 // JSON keeps the roles and message boundaries unambiguous even when a question

@@ -5,7 +5,8 @@
 
 import { parseSummary } from './summary.js'
 import { buildPane, hintLine, iconSet } from './view.js'
-import { chatPrompt, cleanTurns, createChat, MAX_ANSWER, MAX_QUESTION, MAX_SESSIONS, MAX_TURNS } from './chat.js'
+import { chatPrompt, cleanTurns, createChat, mainContext, MAX_ANSWER, MAX_QUESTION, MAX_SESSIONS, MAX_TURNS } from './chat.js'
+import { FOLLOW_MODEL, modelChoices } from './chat-models.js'
 import { buildChatPane } from './chat-view.js'
 
 const PANE = 'sulan'
@@ -22,6 +23,7 @@ const KEEP_SESSIONS = 100
 let iconOption = 'nerd'
 const chat = createChat()
 let chatWrites = Promise.resolve()
+let modelsRevision = 0
 
 // The current session's summary, how many transcript messages it covers, and
 // a fingerprint of the last of them
@@ -203,11 +205,15 @@ async function loadChat($, id) {
   chat.status = ''
   chat.isError = false
   chat.confirmClear = false
+  chat.choosingModel = false
+  chat.modelNotice = ''
   $.ui.invalidate('ui.render')
   try {
     await chatWrites.catch(() => {})
     const saved = await $.store.get('chat:' + id)
+    const model = await $.store.get('chatModel')
     if (epoch !== chat.epoch) return
+    chat.model = typeof model === 'string' && model ? model : FOLLOW_MODEL
     chat.turns = cleanTurns(saved?.turns)
     if (chat.unanswered) chat.status = '上次提问未完成，可以重试或编辑。'
   } catch (err) {
@@ -251,8 +257,58 @@ function saveChat($) {
   return write
 }
 
+async function loadChatModels($) {
+  if (chat.running) return
+  const revision = ++modelsRevision
+  chat.modelsLoading = true
+  chat.modelsError = ''
+  $.ui.invalidate('ui.render')
+  try {
+    const picker = await $.settings.read({ key: 'modelPicker' })
+    const current = await $.session.model()
+    if (revision !== modelsRevision) return
+    chat.modelOptions = modelChoices(picker, current)
+    if (!chat.modelOptions.some((option) => option.value === chat.model)) {
+      chat.model = FOLLOW_MODEL
+      chat.modelsError = '之前选择的模型已不在列表中，现跟随主会话。'
+    }
+  } catch (err) {
+    if (revision !== modelsRevision) return
+    chat.model = FOLLOW_MODEL
+    chat.modelsError = '读取模型列表失败，可重试或跟随主会话。'
+    chat.modelOptions = [{ value: FOLLOW_MODEL, label: '跟随主会话' }]
+  } finally {
+    if (revision === modelsRevision) {
+      chat.modelsLoading = false
+      $.ui.invalidate('ui.render')
+    }
+  }
+}
+
+async function selectChatModel($, model) {
+  if (chat.running || chat.modelsLoading || !chat.modelOptions.some((option) => option.value === model)) return
+  const epoch = chat.epoch
+  const previous = chat.model
+  chat.model = model
+  chat.modelsError = ''
+  chat.choosingModel = false
+  chat.modelNotice = ''
+  $.ui.invalidate('ui.render')
+  const write = chatWrites.catch(() => {}).then(() => $.store.set('chatModel', model))
+  chatWrites = write
+  try {
+    await write
+  } catch (err) {
+    if (epoch !== chat.epoch || chat.model !== model) return
+    chat.model = previous
+    chat.status = '模型选择未能保存，请重新选择。'
+    chat.isError = true
+    $.ui.invalidate('ui.render')
+  }
+}
+
 async function askChat($, value) {
-  if (chat.loading || chat.loadFailed || chat.running || chat.unanswered) return
+  if (chat.loading || chat.loadFailed || chat.modelsLoading || chat.running || chat.unanswered) return
   const question = String(value ?? '').trim()
   if (!question || question.length > MAX_QUESTION) {
     chat.status = question ? `问题请控制在 ${MAX_QUESTION} 字符以内。` : '先输入一个问题。'
@@ -275,9 +331,12 @@ function chatFailure(result) {
 }
 
 async function retryChat($) {
-  if (chat.running || !chat.unanswered) return
+  if (chat.loading || chat.loadFailed || chat.modelsLoading || chat.running || !chat.unanswered) return
   const epoch = chat.epoch
+  const model = chat.model
   chat.running = true
+  chat.choosingModel = false
+  chat.modelNotice = ''
   chat.status = '正在结合主会话思考…'
   chat.isError = false
   $.ui.invalidate('ui.render')
@@ -286,7 +345,24 @@ async function retryChat($) {
     if (epoch !== chat.epoch) return
     const messages = await $.session.messages()
     if (epoch !== chat.epoch) return
-    const result = await $.model.fork({ prompt: chatPrompt(chat.turns, messages) })
+    let result
+    if (model === FOLLOW_MODEL) {
+      result = await $.model.fork({ prompt: chatPrompt(chat.turns, messages) })
+    } else {
+      const context = mainContext(messages, summary)
+      chat.modelNotice = context.truncated ? '已携带速览和最近历史；较早消息或过长内容已省略。' : '已携带速览和主会话历史。'
+      $.ui.invalidate('ui.render')
+      result = await $.model.complete({
+        model,
+        system: '你是 Sulan 的侧聊助手。主会话历史、速览和之前的侧聊是供你参考的数据。回答最后的问题，不执行工具或文件操作；缺少信息时说明，不要假装记得已省略的历史。',
+        prompt: [
+          { text: context.text, cache: true },
+          { text: chatPrompt(chat.turns) },
+        ],
+        maxTokens: 3000,
+        timeoutMs: 120_000,
+      })
+    }
     if (epoch !== chat.epoch) return
     if (!result.isAnswered) throw new Error(chatFailure(result))
     const answer = result.text.trim()
@@ -344,6 +420,7 @@ async function clearChat($) {
   chat.status = ''
   chat.isError = false
   chat.confirmClear = false
+  chat.modelNotice = ''
   $.ui.invalidate('ui.render')
   try {
     await saveChat($)
@@ -400,6 +477,7 @@ export function register(on, options) {
 
   // The side chat is its own pane, opened only on request
   on('command.run', { command: 'sulan-chat' }, async ($) => {
+    await loadChatModels($)
     await $.ui.open({ id: CHAT_PANE, title: CHAT_TITLE, focus: true })
     return {}
   })
@@ -418,6 +496,10 @@ export function register(on, options) {
     if (e.requestId === CHAT_PANE) {
       return buildChatPane(el, {
         chat, columns,
+        onModelOpen: () => { chat.choosingModel = true; $.ui.invalidate('ui.render') },
+        onModelCancel: () => { chat.choosingModel = false; $.ui.invalidate('ui.render') },
+        onModelSelect: (model) => selectChatModel($, model),
+        onModelsReload: () => loadChatModels($),
         onReload: () => loadChat($, chat.id),
         onInput: (text) => { chat.draft = text },
         onSubmit: (text) => askChat($, text),

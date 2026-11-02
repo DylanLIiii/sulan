@@ -8,9 +8,13 @@ const PANE = {
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const answer = (text: string) => ({ isAnswered: true, text, usage: USAGE })
 
-function stub(on: any, fork: (event: any) => any = () => answer('这是回答。'), readFailure = { enabled: false }) {
+function stub(on: any, fork: (event: any) => any = () => answer('这是回答。'), readFailure = { enabled: false }, models = { fail: false, options: [
+  { model: 'gateway/sonnet[1m]', label: 'Sonnet · Gateway' },
+  { model: 'gateway/opus[1m]', label: 'Opus · Gateway' },
+] }) {
   const store = new Map<string, any>()
   const prompts: string[] = []
+  const completions: any[] = []
   const copied: string[] = []
   const opened: any[] = []
   let session = 'one'
@@ -19,6 +23,8 @@ function stub(on: any, fork: (event: any) => any = () => answer('这是回答。
   on('classic.SessionStart', () => ({}))
   on('session.id', () => ({ value: session }))
   on('session.surfaces', () => ({ value: [] }))
+  on('session.model', () => ({ value: 'gateway/main' }))
+  on('settings.read', () => models.fail ? { deny: '设置不可用' } : { value: { modelPicker: { options: models.options, replaceBuiltInOptions: true } } })
   on('session.messages', () => ({ value: [
     { role: 'assistant', text: '主会话刚完成的回答', toolUses: [{ tool: 'Read', text: '最新工具结果' }] },
   ] }))
@@ -30,7 +36,13 @@ function stub(on: any, fork: (event: any) => any = () => answer('这是回答。
   on('ui.open', (_: any, e: any) => { opened.push(e); return { value: { isPlaced: true } } })
   on('ui.copy', (_: any, e: any) => { copied.push(e.text); return { value: { isCopied: true } } })
   on('model.fork', async (_: any, e: any) => { prompts.push(e.prompt); return { value: await fork(e) } })
-  return { store, prompts, copied, opened, switchTo: (id: string) => { session = id } }
+  on('model.complete', async (_: any, e: any) => { completions.push(e); return { value: await fork(e) } })
+  return { store, prompts, completions, copied, opened, switchTo: (id: string) => { session = id } }
+}
+
+async function chooseModel(ui: any, model: string) {
+  await ui.press({ key: 'chat-model-open' })
+  await ui.select({ key: 'chat-model', value: model })
 }
 
 async function start($: any) {
@@ -204,6 +216,101 @@ test('history stays bounded and older sessions are pruned independently', async 
   expect(prompts[8]).toContain('问题8')
 })
 
+
+test('selected models receive main history, summary and follow-ups without changing the main model', async ($, on) => {
+  const { completions, prompts, store } = stub(on)
+  store.set('session:one', { summary: 'TLDR: 本轮改动摘要', covered: 0, marker: '', updatedAt: 1 })
+  const ui = await start($)
+  await ui.input({ key: 'chat-input', text: '先问主模型' })
+  await chooseModel(ui, 'gateway/sonnet[1m]')
+  expect(store.get('chatModel')).toBe('gateway/sonnet[1m]')
+  await ui.input({ key: 'chat-input', text: '换模型继续追问' })
+  expect(completions).toHaveLength(1)
+  expect(prompts).toHaveLength(1)
+  expect(completions[0].model).toBe('gateway/sonnet[1m]')
+  expect(completions[0].prompt).toContain('本轮改动摘要')
+  expect(completions[0].prompt).toContain('主会话刚完成的回答')
+  expect(completions[0].prompt).toContain('最新工具结果')
+  expect(completions[0].prompt).toContain('先问主模型')
+  expect(completions[0].prompt).toContain('这是回答。')
+  expect(completions[0].prompt).toContain('换模型继续追问')
+  await chooseModel(ui, '__follow_main__')
+  await ui.input({ key: 'chat-input', text: '跟随主会话继续' })
+  expect(prompts).toHaveLength(2)
+  expect(completions).toHaveLength(1)
+})
+
+test('long configured model labels remain readable in a narrow pane', async ($, on) => {
+  const models = { fail: false, options: [{ model: 'remote/sonnet[1m]', label: 'Claude Sonnet 5.5 · routing group · Mac Mini Magpie' }] }
+  stub(on, () => answer('这是回答。'), { enabled: false }, models)
+  const initial = await start($)
+  await initial.unmount()
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 24 }, surface: 'terminal' })
+  await chooseModel(ui, 'remote/sonnet[1m]')
+  const button = await ui.find({ key: 'chat-model-open' })
+  expect(button.props.label).toContain('Claude Sonnet')
+})
+
+test('model preferences restore on resume and clearing the chat preserves them', async ($, on) => {
+  const { store, switchTo, completions } = stub(on)
+  const ui = await start($)
+  await chooseModel(ui, 'gateway/opus[1m]')
+  switchTo('two')
+  await $.classic.SessionStart({ source: 'resume' })
+  expect(await ui.find({ type: 'Button', text: /Opus · Gateway/ })).toBeDefined()
+  await ui.input({ key: 'chat-input', text: '新的会话也用选定的模型' })
+  expect(completions[0].model).toBe('gateway/opus[1m]')
+  await ui.press({ key: 'chat-clear' })
+  await ui.press({ key: 'chat-clear-confirm' })
+  expect(store.get('chatModel')).toBe('gateway/opus[1m]')
+})
+
+test('a model-list error is recoverable and a removed selection falls back to follow', async ($, on) => {
+  const models = { fail: true, options: [{ model: 'gateway/sonnet[1m]', label: 'Sonnet · Gateway' }] }
+  const { store } = stub(on, () => answer('这是回答。'), { enabled: false }, models)
+  store.set('chatModel', 'removed/model')
+  const ui = await start($)
+  expect(await ui.find({ type: 'Text', text: /读取模型列表失败/ })).toBeDefined()
+  models.fail = false
+  await ui.press({ key: 'chat-models-reload' })
+  await ui.press({ key: 'chat-model-open' })
+  const picker = await ui.find({ key: 'chat-model' })
+  expect(picker.props.value).toBe('__follow_main__')
+  expect(picker.props.options.map((option: any) => option.value)).toContain('gateway/sonnet[1m]')
+  expect(picker.props.options.map((option: any) => option.value)).not.toContain('removed/model')
+})
+
+test('a failed explicit-model question can be retried on another listed model', async ($, on) => {
+  let attempts = 0
+  const { completions, store } = stub(on, () => ++attempts === 1 ? { isAnswered: false, reason: 'api-error', error: 'rate_limit', status: 429, usage: USAGE } : answer('已恢复'))
+  const ui = await start($)
+  await chooseModel(ui, 'gateway/sonnet[1m]')
+  await ui.input({ key: 'chat-input', text: '待重试的问题' })
+  expect(await ui.find({ type: 'Text', text: /rate_limit/ })).toBeDefined()
+  await chooseModel(ui, 'gateway/opus[1m]')
+  await ui.press({ key: 'chat-retry' })
+  expect(completions.map((request) => request.model)).toEqual(['gateway/sonnet[1m]', 'gateway/opus[1m]'])
+  expect(store.get('chat:one').turns).toEqual([{ question: '待重试的问题', answer: '已恢复' }])
+})
+
+test('a late explicit-model answer cannot leak into another session', async ($, on) => {
+  let resolveAnswer: (value: any) => void = () => {}
+  let markStarted: () => void = () => {}
+  const started = new Promise<void>((resolve) => { markStarted = resolve })
+  const result = new Promise((resolve) => { resolveAnswer = resolve })
+  const { switchTo, store } = stub(on, () => { markStarted(); return result })
+  const ui = await start($)
+  await chooseModel(ui, 'gateway/sonnet[1m]')
+  const sending = ui.input({ key: 'chat-input', text: '原会话的问题' })
+  await started
+  expect(await ui.find({ key: 'chat-model-open' })).toBeUndefined()
+  switchTo('two')
+  await $.classic.SessionStart({ source: 'resume' })
+  resolveAnswer(answer('迟到回答'))
+  await sending
+  expect(await ui.find({ type: 'Markdown', text: '迟到回答' })).toBeUndefined()
+  expect(store.get('chat:two')).toBeUndefined()
+})
 
 test('a storage read failure cannot overwrite history and can be retried', async ($, on) => {
   const failure = { enabled: true }

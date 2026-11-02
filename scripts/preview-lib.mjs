@@ -114,6 +114,8 @@ function render(node, max, opts) {
       const text = p.plain ? key + p.label : `[ ${p.label} ]`
       return [{ s: text, w: (p.hotkey ? p.hotkey.length + 2 : 0) + [...p.label].reduce((a, g) => a + widthOf(g), 0) + (p.plain ? 0 : 4) }]
     }
+    case 'Select':
+      return p.options.flatMap((option) => layoutSpans([{ text: (option.value === p.value ? '› ' : '  ') + (option.label || option.value), style: { color: option.value === p.value ? 'cyan' : undefined } }], max, 'wrap', opts.color))
     case 'Input': {
       const text = (p.label ? p.label + '  ' : '') + (p.value || p.placeholder || '') + (p.submitLabel ? '  [' + p.submitLabel + ']' : '')
       return layoutSpans([{ text, style: { color: p.value ? undefined : 'gray' } }], max, 'wrap', opts.color)

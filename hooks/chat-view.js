@@ -1,6 +1,9 @@
 // The composer and newest exchange stay near the top; older exchanges follow
 // below and can be reached with the pane's normal scrolling.
 
+import { FOLLOW_MODEL, modelLabel } from './chat-models.js'
+import { truncate } from './text.js'
+
 const ACCENT = '#D97757'
 const SUGGESTIONS = [
   ['解释当前改动', '请结合当前会话，解释已经完成的改动及其原因。'],
@@ -9,7 +12,7 @@ const SUGGESTIONS = [
 ]
 
 export function buildChatPane(el, view) {
-  const { Box, Text, Button, Input, Markdown } = el
+  const { Box, Text, Button, Input, Markdown, Select } = el
   const { chat, columns } = view
   const children = [
     Text({ children: [Text({ color: ACCENT, bold: true, children: ['✦ 侧聊'] }), Text({ dimColor: true, children: ['  ·  当前会话'] })] }),
@@ -22,6 +25,25 @@ export function buildChatPane(el, view) {
     return Box({ flexDirection: 'column', children })
   }
 
+  const label = modelLabel(chat)
+  if (chat.modelsLoading) {
+    children.push(Text({ dimColor: true, children: ['正在读取模型列表…'] }))
+  } else if (chat.choosingModel && !chat.running) {
+    children.push(Select({ key: 'chat-model', label: '模型', value: chat.model, options: chat.modelOptions, autoFocus: true, onSelect: view.onModelSelect }))
+    children.push(Button({ key: 'chat-model-cancel', label: '取消选择', plain: true, onPress: view.onModelCancel }))
+  } else if (chat.running) {
+    children.push(Text({ dimColor: true, wrap: 'wrap', children: ['模型：' + label] }))
+  } else {
+    children.push(Button({ key: 'chat-model-open', label: '模型：' + truncate(label, Math.max(8, columns - 8)) + ' ▾', plain: true, onPress: view.onModelOpen }))
+  }
+  if (chat.modelsError) {
+    children.push(Text({ color: 'yellow', wrap: 'wrap', children: [chat.modelsError] }))
+    children.push(Button({ key: 'chat-models-reload', label: '重新读取模型', plain: true, onPress: view.onModelsReload }))
+  }
+  if (chat.model !== FOLLOW_MODEL) {
+    children.push(Text({ dimColor: true, wrap: 'wrap', children: [chat.modelNotice || '自动携带速览、主会话历史和侧聊记录。'] }))
+  }
+
   if (chat.running) {
     children.push(Text({ color: 'yellow', children: ['◐ 正在思考…'] }))
   } else if (chat.unanswered) {
@@ -29,7 +51,7 @@ export function buildChatPane(el, view) {
       Button({ key: 'chat-retry', label: '重试', plain: true, onPress: view.onRetry }),
       Button({ key: 'chat-edit', label: '编辑问题', plain: true, onPress: view.onEdit }),
     ] }))
-  } else {
+  } else if (!chat.choosingModel && !chat.modelsLoading) {
     children.push(Input({
       key: 'chat-input', label: '提问', placeholder: '输入问题…', value: chat.draft,
       submitLabel: '发送', autoFocus: true, onInput: view.onInput, onSubmit: view.onSubmit,
