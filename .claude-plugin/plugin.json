@@ -1,6 +1,6 @@
 {
   "name": "sulan",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "速览：侧边 pane 实时显示会话摘要与彩色流程图，并提供基于主会话上下文的独立侧聊",
   "author": {
     "name": "DylanLi",
