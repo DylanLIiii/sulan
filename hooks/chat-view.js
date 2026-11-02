@@ -3,6 +3,7 @@
 
 import { FOLLOW_MODEL, modelLabel, effortLabel } from './chat-models.js'
 import { truncate } from './text.js'
+import { durationText, turnReply } from './chat-response.js'
 
 const ACCENT = '#D97757'
 const SUGGESTIONS = [
@@ -51,13 +52,19 @@ export function buildChatPane(el, view) {
   }
 
   if (chat.running) {
-    children.push(Text({ color: 'yellow', children: ['◐ 正在思考…'] }))
-  } else if (chat.unanswered) {
+    const phase = { preparing: '准备上下文', waiting: '等待模型回复', saving: '保存回答' }[chat.phase] || '等待模型回复'
+    children.push(Text({ color: 'yellow', children: ['◐ ' + phase + '…'] }))
+  } else if (chat.phase === 'complete' || chat.phase === 'failed') {
+    const elapsed = durationText(chat.durationMs)
+    children.push(Text({ color: chat.phase === 'failed' ? 'red' : 'green', children: [(chat.phase === 'failed' ? '✗ 请求未完成' : '✓ 已完成') + (elapsed ? ' · ' + elapsed : '')] }))
+  }
+
+  if (!chat.running && chat.unanswered) {
     children.push(Box({ flexDirection: 'row', columnGap: 2, children: [
       Button({ key: 'chat-retry', label: '重试', plain: true, onPress: view.onRetry }),
       Button({ key: 'chat-edit', label: '编辑问题', plain: true, onPress: view.onEdit }),
     ] }))
-  } else if (!chat.choosingModel && !chat.choosingEffort && !chat.modelsLoading) {
+  } else if (!chat.running && !chat.choosingModel && !chat.choosingEffort && !chat.modelsLoading) {
     children.push(Input({
       key: 'chat-input', label: '提问', placeholder: '输入问题…', value: chat.draft,
       submitLabel: '发送', autoFocus: true, onInput: view.onInput, onSubmit: view.onSubmit,
@@ -94,9 +101,23 @@ export function buildChatPane(el, view) {
         Text({ color: 'cyan', bold: true, children: ['你'] }),
         Text({ wrap: 'wrap', children: [turn.question] }),
       ]
-      if (turn.answer !== null) {
+      const number = chat.turns.length - index
+      const reply = turnReply(turn)
+      if (reply.thinking) {
+        const expanded = chat.expandedThinking.has(number - 1)
+        const title = reply.kind === 'suspected' ? '疑似 Thinking' : 'Thinking'
+        exchange.push(Button({
+          key: `chat-thinking-${number}`, plain: true,
+          label: (expanded ? '▾ ' : '▸ ') + title + ' · ' + (expanded ? '收起' : '展开'),
+          onPress: () => view.onToggleThinking(number - 1),
+        }))
+        if (expanded) exchange.push(Markdown({ key: `chat-thinking-body-${number}`, text: reply.thinking, dimColor: true }))
+      }
+      if (reply.answer) {
         exchange.push(Text({ color: ACCENT, bold: true, children: ['✦ 侧聊'] }))
-        exchange.push(Markdown({ key: `chat-answer-${chat.turns.length - index}`, text: turn.answer }))
+        exchange.push(Markdown({ key: `chat-answer-${number}`, text: reply.answer }))
+      } else if (reply.thinking && !chat.running) {
+        exchange.push(Text({ color: 'yellow', wrap: 'wrap', children: ['只收到思考，未识别到最终回答。可重试。'] }))
       } else if (!chat.running) {
         exchange.push(Text({ dimColor: true, children: ['这条提问尚未得到回答。'] }))
       }

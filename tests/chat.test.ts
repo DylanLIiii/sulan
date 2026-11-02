@@ -327,6 +327,84 @@ test('a storage read failure cannot overwrite history and can be retried', async
   expect(await ui.find({ type: 'Markdown', text: '保存的回答' })).toBeDefined()
 })
 
+test('tagged thinking is collapsed, expandable, persisted and excluded from copy and follow-up', async ($, on) => {
+  const { copied, store, prompts, switchTo } = stub(on, () => answer('<think>内部规划</think>最终建议'))
+  const ui = await start($)
+  await ui.input({ key: 'chat-input', text: '先看协议？' })
+  expect(await ui.find({ key: 'chat-thinking-1' })).toBeDefined()
+  expect(await ui.find({ key: 'chat-thinking-body-1' })).toBeUndefined()
+  expect(await ui.find({ type: 'Markdown', text: '最终建议' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /已完成/ })).toBeDefined()
+  await ui.press({ key: 'chat-thinking-1' })
+  expect(await ui.find({ type: 'Markdown', text: '内部规划' })).toBeDefined()
+  await ui.press({ key: 'chat-thinking-1' })
+  expect(await ui.find({ type: 'Markdown', text: '内部规划' })).toBeUndefined()
+  await ui.press({ key: 'chat-copy' })
+  expect(copied).toEqual(['最终建议'])
+  expect(store.get('chat:one').turns[0]).toMatchObject({ answer: '最终建议', thinking: '内部规划' })
+  await ui.input({ key: 'chat-input', text: '继续' })
+  expect(prompts[1]).toContain('最终建议')
+  expect(prompts[1]).not.toContain('内部规划')
+  switchTo('two')
+  await $.classic.SessionStart({ source: 'resume' })
+  switchTo('one')
+  await $.classic.SessionStart({ source: 'resume' })
+  expect(await ui.find({ key: 'chat-thinking-1' })).toBeDefined()
+  expect(await ui.find({ key: 'chat-thinking-body-1' })).toBeUndefined()
+})
+
+test('untagged planning-only output is recoverable instead of masquerading as a completed answer', async ($, on) => {
+  let attempt = 0
+  const leaked = 'The user asks in this side chat: "先看协议？"\n\nContext: protocol work.\n\nI should explain the ordering before answering.'
+  const { store, completions } = stub(on, () => answer(++attempt === 1 ? leaked : '先确认协议。'))
+  const ui = await start($)
+  await chooseModel(ui, 'gateway/sonnet[1m]')
+  await ui.input({ key: 'chat-input', text: '先看协议？' })
+  expect(await ui.find({ type: 'Button', text: /疑似 Thinking/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /未识别到最终回答/ })).toBeDefined()
+  expect(await ui.find({ key: 'chat-answer-1' })).toBeUndefined()
+  expect(store.get('chat:one').turns[0].answer).toBe(null)
+  await ui.press({ key: 'chat-retry' })
+  expect(await ui.find({ type: 'Markdown', text: '先确认协议。' })).toBeDefined()
+  expect(store.get('chat:one').turns).toHaveLength(1)
+  expect(completions).toHaveLength(2)
+})
+
+test('waiting status is accurate while the request is pending and late thinking cannot survive clear', async ($, on) => {
+  let release: (value: any) => void = () => {}
+  let started: () => void = () => {}
+  const ready = new Promise<void>((resolve) => { started = resolve })
+  const pending = new Promise((resolve) => { release = resolve })
+  stub(on, () => { started(); return pending })
+  const ui = await start($)
+  const sending = ui.input({ key: 'chat-input', text: '等待中' })
+  await ready
+  expect(await ui.find({ type: 'Text', text: /等待模型回复/ })).toBeDefined()
+  expect(await ui.find({ key: 'chat-answer-1' })).toBeUndefined()
+  await ui.press({ key: 'chat-clear' })
+  await ui.press({ key: 'chat-clear-confirm' })
+  release(answer('<think>迟到思考</think>迟到回答'))
+  await sending
+  expect(await ui.find({ key: 'chat-thinking-1' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /已完成/ })).toBeUndefined()
+})
+
+test('legacy tagged output is folded consistently on every surface', async ($, on) => {
+  const { store } = stub(on)
+  store.set('chat:one', { turns: [{ question: '旧问题', answer: '<think>旧思考</think>旧回答' }] })
+  await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/work' })
+  await $.command.run({ command: 'sulan-chat', args: '' })
+  for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ key: 'chat-thinking-1' })).toBeDefined()
+    expect(await ui.find({ type: 'Markdown', text: '旧思考' })).toBeUndefined()
+    await ui.press({ key: 'chat-thinking-1' })
+    expect(await ui.find({ type: 'Markdown', text: '旧思考' })).toBeDefined()
+    await ui.press({ key: 'chat-thinking-1' })
+    await ui.unmount()
+  }
+})
+
 test('effort level is saved, restored, and sent to model.complete', async ($, on) => {
   const { store, completions } = stub(on, () => answer('这是回答。'), { enabled: false }, undefined, 'high')
   const ui = await start($)

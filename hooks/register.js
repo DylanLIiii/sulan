@@ -8,6 +8,7 @@ import { buildPane, hintLine, iconSet } from './view.js'
 import { chatPrompt, cleanTurns, createChat, mainContext, MAX_ANSWER, MAX_QUESTION, MAX_SESSIONS, MAX_TURNS } from './chat.js'
 import { FOLLOW_MODEL, modelChoices, effortChoices } from './chat-models.js'
 import { buildChatPane } from './chat-view.js'
+import { replyFields } from './chat-response.js'
 
 const PANE = 'sulan'
 const TITLE = '速览'
@@ -208,6 +209,9 @@ async function loadChat($, id) {
   chat.choosingModel = false
   chat.choosingEffort = false
   chat.modelNotice = ''
+  chat.phase = 'idle'
+  chat.durationMs = null
+  chat.expandedThinking.clear()
   $.ui.invalidate('ui.render')
   try {
     await chatWrites.catch(() => {})
@@ -341,6 +345,7 @@ async function askChat($, value) {
     return
   }
   chat.turns = [...chat.turns, { question, answer: null }].slice(-MAX_TURNS)
+  chat.expandedThinking.clear()
   chat.draft = ''
   chat.confirmClear = false
   return retryChat($)
@@ -363,15 +368,22 @@ async function retryChat($) {
   chat.choosingModel = false
   chat.choosingEffort = false
   chat.modelNotice = ''
-  chat.status = '正在结合主会话思考…'
+  chat.status = ''
   chat.isError = false
+  chat.phase = 'preparing'
+  chat.durationMs = null
+  let startedAt = 0
   $.ui.invalidate('ui.render')
   try {
+    startedAt = await $.clock.now()
+    if (epoch !== chat.epoch) return
     await saveChat($)
     if (epoch !== chat.epoch) return
     const messages = await $.session.messages()
     if (epoch !== chat.epoch) return
     let result
+    chat.phase = 'waiting'
+    $.ui.invalidate('ui.render')
     if (model === FOLLOW_MODEL) {
       result = await $.model.fork({ prompt: chatPrompt(chat.turns, messages) })
     } else {
@@ -386,18 +398,32 @@ async function retryChat($) {
           { text: context.text, cache: true },
           { text: chatPrompt(chat.turns) },
         ],
-        maxTokens: 3000,
+        maxTokens: 6000,
         timeoutMs: 120_000,
       })
     }
     if (epoch !== chat.epoch) return
     if (!result.isAnswered) throw new Error(chatFailure(result))
-    const answer = result.text.trim()
-    if (!answer) throw new Error('模型没有返回内容')
-    chat.turns[chat.turns.length - 1].answer = answer.length > MAX_ANSWER ? answer.slice(0, MAX_ANSWER) + '\n\n…（回答过长，已截断）' : answer
+    const text = result.text.trim()
+    if (!text) throw new Error('模型没有返回内容')
+    // Separate thinking BEFORE applying the answer cap; a long reasoning
+    // preamble must not use up the final answer's storage/display allowance.
+    const fields = replyFields(text, MAX_ANSWER)
+    const turn = chat.turns.at(-1)
+    delete turn.thinking
+    delete turn.thinkingKind
+    delete turn.thinkingIncomplete
+    Object.assign(turn, fields)
+    chat.expandedThinking.delete(chat.turns.length - 1)
+    if (!fields.answer) {
+      chat.status = '模型只返回了思考或疑似思考，未识别到最终回答；可以重试或换模型。'
+      chat.isError = true
+    }
+    chat.phase = 'saving'
+    $.ui.invalidate('ui.render')
     try {
       await saveChat($)
-      if (epoch === chat.epoch) chat.status = ''
+      if (epoch === chat.epoch && fields.answer) chat.status = ''
     } catch (err) {
       if (epoch === chat.epoch) {
         chat.status = '回答已生成，但保存失败：' + (err?.message || String(err))
@@ -410,8 +436,13 @@ async function retryChat($) {
     chat.isError = true
   } finally {
     if (epoch === chat.epoch) {
-      chat.running = false
-      $.ui.invalidate('ui.render')
+      const finishedAt = await $.clock.now().catch(() => startedAt)
+      if (epoch === chat.epoch) {
+        chat.running = false
+        chat.phase = chat.isError ? 'failed' : 'complete'
+        chat.durationMs = Math.max(0, finishedAt - startedAt)
+        $.ui.invalidate('ui.render')
+      }
     }
   }
 }
@@ -421,6 +452,9 @@ async function editChatQuestion($) {
   const epoch = chat.epoch
   chat.draft = chat.turns.at(-1).question
   chat.turns = chat.turns.slice(0, -1)
+  chat.expandedThinking.clear()
+  chat.phase = 'idle'
+  chat.durationMs = null
   chat.status = ''
   chat.isError = false
   $.ui.invalidate('ui.render')
@@ -449,6 +483,9 @@ async function clearChat($) {
   chat.confirmClear = false
   chat.choosingEffort = false
   chat.modelNotice = ''
+  chat.phase = 'idle'
+  chat.durationMs = null
+  chat.expandedThinking.clear()
   $.ui.invalidate('ui.render')
   try {
     await saveChat($)
@@ -524,10 +561,15 @@ export function register(on, options) {
     if (e.requestId === CHAT_PANE) {
       return buildChatPane(el, {
         chat, columns,
-        onModelOpen: () => { chat.choosingModel = true; $.ui.invalidate('ui.render') },
+        onToggleThinking: (index) => {
+          if (chat.expandedThinking.has(index)) chat.expandedThinking.delete(index)
+          else chat.expandedThinking.add(index)
+          $.ui.invalidate('ui.render')
+        },
+        onModelOpen: () => { chat.choosingEffort = false; chat.choosingModel = true; $.ui.invalidate('ui.render') },
         onModelCancel: () => { chat.choosingModel = false; $.ui.invalidate('ui.render') },
         onModelSelect: (model) => selectChatModel($, model),
-        onEffortOpen: () => { chat.choosingEffort = true; $.ui.invalidate('ui.render') },
+        onEffortOpen: () => { chat.choosingModel = false; chat.choosingEffort = true; $.ui.invalidate('ui.render') },
         onEffortCancel: () => { chat.choosingEffort = false; $.ui.invalidate('ui.render') },
         onEffortSelect: (effort) => selectChatEffort($, effort),
         onModelsReload: () => loadChatModels($),

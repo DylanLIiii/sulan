@@ -1,4 +1,5 @@
 import { FOLLOW_MODEL, DEFAULT_EFFORT, effortChoices } from './chat-models.js'
+import { replyFields, MAX_THINKING } from './chat-response.js'
 
 // Pure helpers for the side conversation. The hook module owns the state and
 // API calls, which Claude Code must be able to inspect statically.
@@ -14,7 +15,15 @@ export function cleanTurns(value) {
   return value
     .filter((turn) => turn && typeof turn.question === 'string' && (turn.answer === null || typeof turn.answer === 'string'))
     .slice(-MAX_TURNS)
-    .map((turn) => ({ question: turn.question.slice(0, MAX_QUESTION), answer: turn.answer?.slice(0, MAX_ANSWER + 30) ?? null }))
+    .map((turn) => ({
+      question: turn.question.slice(0, MAX_QUESTION),
+      ...(turn.answer === null ? { answer: null } : replyFields(turn.answer, MAX_ANSWER)),
+      ...(typeof turn.thinking === 'string' && turn.thinking ? {
+        thinking: turn.thinking.slice(0, MAX_THINKING + 30),
+        thinkingKind: turn.thinkingKind === 'suspected' ? 'suspected' : 'tagged',
+        ...(turn.thinkingIncomplete ? { thinkingIncomplete: true } : {}),
+      } : {}),
+    }))
 }
 
 export function createChat() {
@@ -22,6 +31,7 @@ export function createChat() {
     id: '', turns: [], draft: '', loading: false, loadFailed: false, running: false, status: '', isError: false, confirmClear: false, epoch: 0,
     model: FOLLOW_MODEL, modelOptions: [{ value: FOLLOW_MODEL, label: '跟随主会话' }], modelsError: '', modelsLoading: false, choosingModel: false, modelNotice: '',
     effort: DEFAULT_EFFORT, effortOptions: effortChoices(), choosingEffort: false,
+    phase: 'idle', durationMs: null, expandedThinking: new Set(),
     get unanswered() { return this.turns.at(-1)?.answer === null },
     get lastAnswer() { return this.turns.findLast((turn) => turn.answer !== null)?.answer ?? '' },
   }
@@ -93,12 +103,12 @@ export function chatPrompt(turns, messages = []) {
     if (turn.answer === null) continue
     const size = turn.question.length + turn.answer.length
     if (size > remaining) break
-    previous.unshift(turn)
+    previous.unshift({ question: turn.question, answer: turn.answer })
     remaining -= size
   }
   return [
     '这是与主会话并行的独立侧聊。请结合主会话已有上下文，回答最后的问题；侧聊不会自动写入主会话。',
-    '请使用提问者的语言，简洁、具体地回答；信息不足时明确说明。你不能在此侧聊中执行操作或修改文件，不要声称已经执行。',
+    '请使用提问者的语言，直接输出最终回答，不要把英文自述、回答规划或推理草稿混入正文；如服务端把推理放进文本，必须用 <think>...</think> 与最终回答分开。信息不足时明确说明。你不能在此侧聊中执行操作或修改文件，不要声称已经执行。',
     '主会话最近的片段（JSON，可能与上下文重叠）：',
     JSON.stringify(recentTranscript(messages)),
     '以下是之前的侧聊记录（JSON，按时间顺序）：',
