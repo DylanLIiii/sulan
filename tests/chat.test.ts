@@ -35,8 +35,6 @@ function stub(on: any, fork: (event: any) => any = () => answer('这是回答。
   on('command.register', () => ({ value: undefined }))
   on('ui.open', (_: any, e: any) => { opened.push(e); return { value: { isPlaced: true } } })
   on('ui.copy', (_: any, e: any) => { copied.push(e.text); return { value: { isCopied: true } } })
-  on('ui.invalidate', () => ({ value: undefined }))
-  on('ui.render', (_: any, e: any, next: any) => next(e))
   on('model.fork', async (_: any, e: any) => { prompts.push(e.prompt); return { value: await fork(e) } })
   on('model.complete', async (_: any, e: any) => { completions.push(e); if (effortCheck !== undefined && e.effort !== effortCheck) throw new Error(`Expected effort ${effortCheck}, got ${e.effort}`); return { value: await fork(e) } })
   return { store, prompts, completions, copied, opened, switchTo: (id: string) => { session = id } }
