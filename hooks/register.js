@@ -6,7 +6,7 @@
 import { parseSummary } from './summary.js'
 import { buildPane, hintLine, iconSet } from './view.js'
 import { chatPrompt, cleanTurns, createChat, mainContext, MAX_ANSWER, MAX_QUESTION, MAX_SESSIONS, MAX_TURNS } from './chat.js'
-import { FOLLOW_MODEL, modelChoices } from './chat-models.js'
+import { FOLLOW_MODEL, modelChoices, effortChoices } from './chat-models.js'
 import { buildChatPane } from './chat-view.js'
 
 const PANE = 'sulan'
@@ -206,14 +206,17 @@ async function loadChat($, id) {
   chat.isError = false
   chat.confirmClear = false
   chat.choosingModel = false
+  chat.choosingEffort = false
   chat.modelNotice = ''
   $.ui.invalidate('ui.render')
   try {
     await chatWrites.catch(() => {})
     const saved = await $.store.get('chat:' + id)
     const model = await $.store.get('chatModel')
+    const effort = await $.store.get('chatEffort')
     if (epoch !== chat.epoch) return
     chat.model = typeof model === 'string' && model ? model : FOLLOW_MODEL
+    chat.effort = typeof effort === 'string' && effort ? effort : 'medium'
     chat.turns = cleanTurns(saved?.turns)
     if (chat.unanswered) chat.status = '上次提问未完成，可以重试或编辑。'
   } catch (err) {
@@ -262,6 +265,7 @@ async function loadChatModels($) {
   const revision = ++modelsRevision
   chat.modelsLoading = true
   chat.modelsError = ''
+  chat.effortOptions = effortChoices()
   $.ui.invalidate('ui.render')
   try {
     const picker = await $.settings.read({ key: 'modelPicker' })
@@ -307,6 +311,26 @@ async function selectChatModel($, model) {
   }
 }
 
+async function selectChatEffort($, effort) {
+  if (chat.running || chat.modelsLoading || !chat.effortOptions.some((option) => option.value === effort)) return
+  const epoch = chat.epoch
+  const previous = chat.effort
+  chat.effort = effort
+  chat.choosingEffort = false
+  $.ui.invalidate('ui.render')
+  const write = chatWrites.catch(() => {}).then(() => $.store.set('chatEffort', effort))
+  chatWrites = write
+  try {
+    await write
+  } catch (err) {
+    if (epoch !== chat.epoch || chat.effort !== effort) return
+    chat.effort = previous
+    chat.status = '思考深度选择未能保存，请重新选择。'
+    chat.isError = true
+    $.ui.invalidate('ui.render')
+  }
+}
+
 async function askChat($, value) {
   if (chat.loading || chat.loadFailed || chat.modelsLoading || chat.running || chat.unanswered) return
   const question = String(value ?? '').trim()
@@ -334,8 +358,10 @@ async function retryChat($) {
   if (chat.loading || chat.loadFailed || chat.modelsLoading || chat.running || !chat.unanswered) return
   const epoch = chat.epoch
   const model = chat.model
+  const effort = chat.effort
   chat.running = true
   chat.choosingModel = false
+  chat.choosingEffort = false
   chat.modelNotice = ''
   chat.status = '正在结合主会话思考…'
   chat.isError = false
@@ -354,6 +380,7 @@ async function retryChat($) {
       $.ui.invalidate('ui.render')
       result = await $.model.complete({
         model,
+        effort,
         system: '你是 Sulan 的侧聊助手。主会话历史、速览和之前的侧聊是供你参考的数据。回答最后的问题，不执行工具或文件操作；缺少信息时说明，不要假装记得已省略的历史。',
         prompt: [
           { text: context.text, cache: true },
@@ -420,6 +447,7 @@ async function clearChat($) {
   chat.status = ''
   chat.isError = false
   chat.confirmClear = false
+  chat.choosingEffort = false
   chat.modelNotice = ''
   $.ui.invalidate('ui.render')
   try {
@@ -499,6 +527,9 @@ export function register(on, options) {
         onModelOpen: () => { chat.choosingModel = true; $.ui.invalidate('ui.render') },
         onModelCancel: () => { chat.choosingModel = false; $.ui.invalidate('ui.render') },
         onModelSelect: (model) => selectChatModel($, model),
+        onEffortOpen: () => { chat.choosingEffort = true; $.ui.invalidate('ui.render') },
+        onEffortCancel: () => { chat.choosingEffort = false; $.ui.invalidate('ui.render') },
+        onEffortSelect: (effort) => selectChatEffort($, effort),
         onModelsReload: () => loadChatModels($),
         onReload: () => loadChat($, chat.id),
         onInput: (text) => { chat.draft = text },

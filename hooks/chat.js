@@ -1,7 +1,7 @@
+import { FOLLOW_MODEL, DEFAULT_EFFORT, effortChoices } from './chat-models.js'
+
 // Pure helpers for the side conversation. The hook module owns the state and
 // API calls, which Claude Code must be able to inspect statically.
-
-import { FOLLOW_MODEL } from './chat-models.js'
 
 export const MAX_TURNS = 8
 export const MAX_SESSIONS = 15
@@ -21,6 +21,7 @@ export function createChat() {
   return {
     id: '', turns: [], draft: '', loading: false, loadFailed: false, running: false, status: '', isError: false, confirmClear: false, epoch: 0,
     model: FOLLOW_MODEL, modelOptions: [{ value: FOLLOW_MODEL, label: '跟随主会话' }], modelsError: '', modelsLoading: false, choosingModel: false, modelNotice: '',
+    effort: DEFAULT_EFFORT, effortOptions: effortChoices(), choosingEffort: false,
     get unanswered() { return this.turns.at(-1)?.answer === null },
     get lastAnswer() { return this.turns.findLast((turn) => turn.answer !== null)?.answer ?? '' },
   }

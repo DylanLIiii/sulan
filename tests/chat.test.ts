@@ -11,7 +11,7 @@ const answer = (text: string) => ({ isAnswered: true, text, usage: USAGE })
 function stub(on: any, fork: (event: any) => any = () => answer('这是回答。'), readFailure = { enabled: false }, models = { fail: false, options: [
   { model: 'gateway/sonnet[1m]', label: 'Sonnet · Gateway' },
   { model: 'gateway/opus[1m]', label: 'Opus · Gateway' },
-] }) {
+] }, effortCheck: string | undefined = undefined) {
   const store = new Map<string, any>()
   const prompts: string[] = []
   const completions: any[] = []
@@ -35,8 +35,10 @@ function stub(on: any, fork: (event: any) => any = () => answer('这是回答。
   on('command.register', () => ({ value: undefined }))
   on('ui.open', (_: any, e: any) => { opened.push(e); return { value: { isPlaced: true } } })
   on('ui.copy', (_: any, e: any) => { copied.push(e.text); return { value: { isCopied: true } } })
+  on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.render', (_: any, e: any, next: any) => next(e))
   on('model.fork', async (_: any, e: any) => { prompts.push(e.prompt); return { value: await fork(e) } })
-  on('model.complete', async (_: any, e: any) => { completions.push(e); return { value: await fork(e) } })
+  on('model.complete', async (_: any, e: any) => { completions.push(e); if (effortCheck !== undefined && e.effort !== effortCheck) throw new Error(`Expected effort ${effortCheck}, got ${e.effort}`); return { value: await fork(e) } })
   return { store, prompts, completions, copied, opened, switchTo: (id: string) => { session = id } }
 }
 
@@ -325,4 +327,16 @@ test('a storage read failure cannot overwrite history and can be retried', async
   await ui.press({ key: 'chat-reload' })
   expect(await ui.find({ type: 'Text', text: '保存的问题' })).toBeDefined()
   expect(await ui.find({ type: 'Markdown', text: '保存的回答' })).toBeDefined()
+})
+
+test('effort level is saved, restored, and sent to model.complete', async ($, on) => {
+  const { store, completions } = stub(on, () => answer('这是回答。'), { enabled: false }, undefined, 'high')
+  const ui = await start($)
+  await ui.press({ key: 'chat-effort-open' })
+  await ui.select({ key: 'chat-effort', value: 'high' })
+  expect(store.get('chatEffort')).toBe('high')
+  await chooseModel(ui, 'gateway/sonnet[1m]')
+  await ui.input({ key: 'chat-input', text: '测试 effort 传递' })
+  expect(completions[0].effort).toBe('high')
+  expect(completions[0].model).toBe('gateway/sonnet[1m]')
 })
